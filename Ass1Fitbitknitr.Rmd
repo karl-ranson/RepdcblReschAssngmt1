@@ -1,0 +1,191 @@
+---
+title: "S5ReprRsch.Ass1Fitbitknitr"
+author: "Karl Ranson"
+date: "10 July 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### R Code - setting up the environment
+
+Load relevant libraries
+
+```{r load_packages, include=FALSE}
+library("dplyr")
+library("xtable")
+library("ggplot2")
+```
+
+
+## Part1: Sourcing the code
+
+Zip file was downloaded from this link:  <https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2Factivity.zip> and saved to the working directory. 
+
+```{r sourcecode}
+if (!(file.exists("activity.csv"))) {
+      url <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2Factivity.zip"
+      download.file(url, dest="repdata%2Fdata%2Factivity.zip") 
+      unzip("repdata%2Fdata%2Factivity.zip")
+}
+df <- read.csv("activity.csv")
+
+df$steps <- as.numeric(df$steps)
+df$date <- as.Date(levels(df$date))
+df$interval <- as.factor(df$interval)
+
+numzero <- count(df[df$steps ==0,])
+```
+Number of values that are = 0 are `r numzero`.
+
+
+## Part2: Daily steps histogram
+
+```{r}
+NumDays <- length(unique(df$date)) #Number of days in the dataset
+df2 <- df[,1:2] #Select first two columns only. 
+
+df2 <- group_by(df2, date) %>% 
+      summarise(sumsteps = sum(steps,na.rm = TRUE))
+
+hist(df2$sumsteps, xlab = "Total steps in a 24hr period",
+     main = paste("Histogram of daily steps for all ",NumDays," days"))
+```
+
+## Part3: Mean & medium # of steps taken each day
+
+```{r}
+df3 <- df[,1:2] #Select first two columns only. 
+df3 <- group_by(df3, date) %>% 
+      summarise(meansteps = mean(steps,na.rm = TRUE), mediansteps = median(steps, na.rm=TRUE))
+mn <- mean(df$steps, na.rm = TRUE)
+mn <- round(mean(df$steps, na.rm = TRUE),1)
+mdn <- median(df$steps, na.rm = TRUE)
+```
+'df3' returns a data frame with mean and median steps for each of the 61 days covered by the study.   
+
+Overall mean and median are `r mn` and `r mdn` respectively. The median for all days is 0 as most 5min slots over a 24hr are inactive.
+
+## Part4: Time series plot of the average number of steps taken
+
+```{r}
+library(ggplot2)
+df4 <- df[,c(1,3)] #Select first two columns only. 
+df4 <- group_by(df4, interval) %>% 
+      summarise(meansteps = mean(steps,na.rm = TRUE))
+
+plot(df4)
+lines(df4)
+```
+
+## Part5: The 5-minute interval that, on average, contains the maximum number of steps
+
+```{r}
+df5 <- arrange(df4,desc(meansteps))
+maxno <- df5[1,1]
+```
+
+The 5 min interval with max av steps is `r maxno`.
+
+## Part6: Code to describe and show a strategy for imputing missing data
+
+Before we proposed an imput strategy, let's have a closer look at where the data is missing. 
+
+```{r}
+numvals <- dim(df)[1]
+isna <- sum(is.na(df$steps))
+
+percent <- function(x, digits = 2, format = "f", ...) {
+  paste0(formatC(100 * x, format = format, digits = digits, ...), "%")
+}
+pcna <- percent(isna/numvals)
+```
+
+Number of values that are 'na' is `r isna`. 
+Percentage of the total number of values `r numvals` which are na is `r pcna`. 
+
+Let's see if there are any patterns of what days or times of the day are missing data:
+
+```{r}
+row.has.na <- apply(df, 1, function(x){any(is.na(x))})
+df6 <- df[row.has.na,2:3]
+barplot(table(df6$date)) #shows each day has similar number of missing values
+barplot(table(df6$interval)) #show all time intervals have exactly 8 missing values total
+```
+One strategy to fill in missing gaps would be to take the average of the intervals. However, this may actually lose us information. Let's see if there's any obvious correlation when we look at a small dataset of 4 days, taken from ends and middle of the data: 
+```{r}
+df6sample <-  filter(df,date == "2012-10-01" | date == "2012-10-30"| date == "2012-11-01"| date == "2012-11-30")
+
+ggplot(data=df6sample, aes(x=interval, y=steps, group = date, colour = date)) +
+    geom_line() +
+    geom_point( size=4, shape=4, fill="white")
+```
+
+
+Visually, there is not an obvious strong correlation here. However, in the absence of a better strategy, let's populate missing data with the average for that interval, even though that may reduce variance for questionable gain.  
+
+```{r}
+
+df6 <- df %>% group_by(interval) %>% mutate(sanitised = ifelse(is.na(steps),mean(steps, na.rm=TRUE),steps))
+summary(df6)
+sum(df6$sanitised)
+sum(df$steps, na.rm = T)
+
+```
+
+From the summary of the 'sanitised' column, we can see that the mean is the same as 'steps', with greater value for 3rd quadrant and no NA's. 
+
+### Part7: Histogram of the total number of steps taken each day after missing values are imputed
+
+```{r}
+# par(mfrow = c(2,1))
+
+df2 <- df[,1:2] #Select first two columns only. 
+
+df2sum <- group_by(df2, date) %>% 
+      summarise(sumsteps = sum(steps,na.rm = TRUE))
+
+df7sum <- group_by(df6, date) %>% 
+      summarise(sumfilled = sum(sanitised,na.rm = TRUE))
+
+hist(df2sum$sumsteps, xlab = "Total steps in a 24hr period",
+     main = paste("Histogram of daily steps - Original data"))
+
+hist(df7sum$sumfilled, xlab = "Total steps in a 24hr period",
+     main = paste("Histogram of daily steps - Filled data"))
+
+summary(df2sum$sumsteps)
+summary(df7sum$sumfilled)
+
+```
+
+### Part 8: Panel plot comparing the average number of steps taken per 5-minute interval across weekdays and weekends
+
+```{R}
+df8 <- df6
+df8$day <- weekdays(as.Date(df8$date))
+
+df8 <- mutate(df8,weekend = ifelse(as.POSIXlt(date)$wday >5|as.POSIXlt(date)$wday==0,1,0))
+df8$weekend <- as.factor(df8$weekend)
+
+df8sum <- group_by(df8, weekend, interval) %>% 
+      summarise(sumfilled = mean(sanitised,na.rm = TRUE)) 
+
+df8s.w.end <- filter(df8sum, weekend == 1)
+df8s.w.day <- filter(df8sum, weekend == 0)
+
+plot(df8s.w.end$interval,df8s.w.end$sumfilled, lty=1, ylim = c(0,270))
+title(main="Average interval steps throughout an average weekend day")
+lines(df8s.w.end$interval,df8s.w.end$sumfilled, lty=1)
+
+plot(df8s.w.day$interval,df8s.w.day$sumfilled, lty=3, ylim = c(0,270))
+title(main="Average interval steps throughout an average week day")
+lines(df8s.w.day$interval,df8s.w.day$sumfilled, lty=3)
+
+summary(df8s.w.day$sumfilled)
+summary(df8s.w.end$sumfilled)
+```
+
+Weekend steps has a higher average but lower median, indicating that weekends involve more seditary intervals, but significantly more steps taken during active intervals. 
